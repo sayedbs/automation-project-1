@@ -131,8 +131,9 @@ async function generatePDFReport(results) {
       const imgWidth = 180;
       const margin = 30;
       const startX = 50;
-      const y = doc.y;
+      let y = doc.y;
 
+      // DEV and PROD side by side in one row
       if (fs.existsSync(result.devPath)) {
         doc.image(result.devPath, startX, y, { width: imgWidth });
         doc.fontSize(10).text('DEV', startX, y + imgWidth + 5, { width: imgWidth, align: 'center' });
@@ -141,22 +142,25 @@ async function generatePDFReport(results) {
         doc.image(result.prodPath, startX + imgWidth + margin, y, { width: imgWidth });
         doc.fontSize(10).text('PROD', startX + imgWidth + margin, y + imgWidth + 5, { width: imgWidth, align: 'center' });
       }
+
+      // Move below the first row for DIFF image
+      y = y + imgWidth + 40;
       if (fs.existsSync(result.diffPath)) {
-        doc.image(result.diffPath, startX + 2 * (imgWidth + margin), y, { width: imgWidth });
-        doc.fontSize(10).text('DIFF', startX + 2 * (imgWidth + margin), y + imgWidth + 5, { width: imgWidth, align: 'center' });
+        doc.image(result.diffPath, startX, y, { width: imgWidth * 2 + margin });
+        doc.fontSize(10).text('DIFF', startX, y + imgWidth + 5, { width: imgWidth * 2 + margin, align: 'center' });
       }
 
-      doc.moveDown(10);
+      doc.moveDown(18);
       doc.fontSize(14).text(
-          `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
-          { align: 'left' }
+        `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
+        { align: 'left' }
       );
 
       if (!result.match) {
         doc.moveDown();
         doc.fontSize(12).fillColor('red').text(
-            'Differences highlighted in the DIFF image (right). Red/pink areas show where the screenshots differ.',
-            { align: 'left' }
+          'Differences highlighted in the DIFF image above. Red/pink areas show where the screenshots differ.',
+          { align: 'left' }
         );
         doc.fillColor('black');
       }
