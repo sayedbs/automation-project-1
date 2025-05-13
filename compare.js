@@ -64,34 +64,35 @@ async function ensureLoggedIn(page) {
   }
 }
 
-async function captureScreenshot(page, url, outputPath) {
-  try {
+// Get the content height for a given URL
+async function getPageHeight(page, url) {
     await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
     await page.waitForLoadState("domcontentloaded");
-
-    // Handle German Cookie Banner (CookieYes)
-    if (!cookieAccepted) {
-      try {
-        const cookieButton = page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]').first();
-        if (await cookieButton.isVisible()) {
-          await cookieButton.click();
-          console.log('🍪 Cookie consent accepted');
-          await page.waitForTimeout(500);
-        } else {
-          console.log('🍪 Cookie consent not visible — skipping');
-        }
-      } catch (err) {
-        console.warn('⚠️ Skipped cookie consent click:', err.message);
-      }
+    // Accept cookie if needed
+    if (!global.cookieAccepted) {
+        try {
+            const cookieButton = page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]').first();
+            if (await cookieButton.isVisible({ timeout: 3000 })) {
+                await cookieButton.click();
+                global.cookieAccepted = true;
+                await page.waitForTimeout(500);
+            }
+        } catch {}
     }
+    const height = await page.evaluate(() => {
+        const el = document.querySelector('.app_container > .layout > .content');
+        return el ? el.offsetHeight + 80 : document.body.scrollHeight;
+    });
+    return height;
+}
 
-    await page.waitForTimeout(2000);
-    await page.screenshot({ path: outputPath, fullPage: true });
+async function captureScreenshot(page, url, outputPath, height) {
+    await page.setViewportSize({ width: 1600, height });
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: outputPath, fullPage: false });
     console.log(`✅ Screenshot captured: ${outputPath}`);
-  } catch (error) {
-    console.error(`❌ Error capturing screenshot for ${url}:`, error.message);
-    throw error;
-  }
 }
 
 async function generatePDFReport(results) {
@@ -167,6 +168,7 @@ async function generatePDFReport(results) {
         console.error('Error generating PDF:', error.message);
     }
 }
+
 function compareScreenshots(img1Path, img2Path, diffPath) {
   const img1 = PNG.sync.read(fs.readFileSync(img1Path));
   const img2 = PNG.sync.read(fs.readFileSync(img2Path));
@@ -182,68 +184,87 @@ function compareScreenshots(img1Path, img2Path, diffPath) {
 }
 
 async function main() {
-  try {
-
-      // Clean output directories before generating new results
-      ['dev', 'prod', 'diff'].forEach(dir => {
-          fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
-      });
-      fs.emptyDirSync('reports');
-
-    ['dev', 'prod', 'diff'].forEach(dir =>
-        fs.ensureDirSync(`${config.screenshotDir}/${dir}`)
-    );
-    fs.ensureDirSync('reports');
-
-    const urls = await readUrlsFromExcel(config.excelFile);
-    if (!urls.length) return console.log('No URLs to process. Exiting.');
-
-    const browser = await chromium.launchPersistentContext(contextDir, {
-      headless: false,  // 🚨 Visible browser to support login
-      args: [
-        '--disable-blink-features=AutomationControlled'
-      ],
-      viewport: null
-    });
-
-    const page = await browser.newPage();
-    await ensureLoggedIn(page); // 🔑 Login check happens here
-
-    const results = [];
-
-    for (const urlPath of urls) {
-      console.log(`\n🔍 Processing: ${urlPath}`);
-      const cleanName = urlPath.replace(/\W+/g, '_');
-      const paths = {
-        dev: `${config.screenshotDir}/dev/${cleanName}.png`,
-        prod: `${config.screenshotDir}/prod/${cleanName}.png`,
-        diff: `${config.screenshotDir}/diff/${cleanName}_diff.png`
-      };
-
-      try {
-        await captureScreenshot(page, `${config.devBase}${urlPath}`, paths.dev);
-        await captureScreenshot(page, `${config.prodBase}${urlPath}`, paths.prod);
-        const diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
-
-        results.push({
-          url: urlPath,
-          match: diffPixels === 0,
-          diffPixels,
-          devPath: paths.dev,
-          prodPath: paths.prod,
-          diffPath: paths.diff
+    try {
+        // Clean output directories before generating new results
+        ['dev', 'prod', 'diff'].forEach(dir => {
+            fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
         });
-      } catch (error) {
-        console.error(`❌ Failed to process ${urlPath}`);
-      }
-    }
+        fs.emptyDirSync('reports');
 
-    await browser.close();
-    await generatePDFReport(results);
-  } catch (error) {
-    console.error('❌ Process failed:', error.message);
-    process.exit(1);
-  }
+        ['dev', 'prod', 'diff'].forEach(dir =>
+            fs.ensureDirSync(`${config.screenshotDir}/${dir}`)
+        );
+        fs.ensureDirSync('reports');
+
+        const urls = await readUrlsFromExcel(config.excelFile);
+        if (!urls.length) {
+            console.log('No URLs to process. Exiting.');
+            return;
+        }
+
+        const browser = await chromium.launchPersistentContext(contextDir, {
+            headless: false, // Visible browser to support login
+            args: ['--disable-blink-features=AutomationControlled'],
+            viewport: null
+        });
+
+        const page = await browser.newPage();
+        await ensureLoggedIn(page); // 🔐 Login if required
+
+        const results = [];
+
+        for (const urlPath of urls) {
+            console.log(`\n🔍 Processing: ${urlPath}`);
+            const cleanName = urlPath.replace(/\W+/g, '_');
+            const paths = {
+                dev: `${config.screenshotDir}/dev/${cleanName}.png`,
+                prod: `${config.screenshotDir}/prod/${cleanName}.png`,
+                diff: `${config.screenshotDir}/diff/${cleanName}_diff.png`
+            };
+
+            try {
+                // Get heights for both pages
+                const devHeight = await getPageHeight(page, `${config.devBase}${urlPath}`);
+                const prodHeight = await getPageHeight(page, `${config.prodBase}${urlPath}`);
+                const maxHeight = Math.max(devHeight, prodHeight);
+
+                // Take screenshots with the same height
+                await captureScreenshot(page, `${config.devBase}${urlPath}`, paths.dev, maxHeight);
+                await captureScreenshot(page, `${config.prodBase}${urlPath}`, paths.prod, maxHeight);
+
+                if (!fs.existsSync(paths.dev) || !fs.existsSync(paths.prod)) {
+                    throw new Error("One or both screenshot files are missing");
+                }
+
+                let diffPixels;
+                try {
+                    diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
+                } catch (compareError) {
+                    console.error(`🛑 Screenshot comparison failed for ${urlPath}:`, compareError.message);
+                    continue;
+                }
+
+                results.push({
+                    url: urlPath,
+                    match: diffPixels === 0,
+                    diffPixels,
+                    devPath: paths.dev,
+                    prodPath: paths.prod,
+                    diffPath: paths.diff
+                });
+            } catch (error) {
+                console.error(`❌ Failed to process ${urlPath}:`, error.message);
+                console.error(error);
+            }
+        }
+
+        await browser.close();
+        await generatePDFReport(results);
+    } catch (error) {
+        console.error('❌ Process failed:', error.message);
+        console.error(error); // Full stack trace for critical error
+        process.exit(1);
+    }
 }
 
 main();
