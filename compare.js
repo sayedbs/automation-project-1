@@ -104,9 +104,9 @@ async function captureScreenshot(page, url, outputPath) {
       `
     });
 
-      await page.waitForTimeout(1000);
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await page.waitForTimeout(4000);
+    await page.waitForTimeout(500);
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(4000);
     await page.screenshot({ path: outputPath, fullPage: true });
     console.log(`✅ Screenshot captured: ${outputPath}`);
   } catch (error) {
@@ -123,13 +123,12 @@ async function generatePDFReport(results) {
 
         // Cover page
         doc.addPage();
-        doc.fontSize(24).text('Visual Comparison Report', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, {align: 'center'});
+        doc.fontSize(24).text('Visual Comparison Report', { align: 'center', baseline: 'top' });
+        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
 
         for (const result of results) {
             doc.addPage();
-            doc.fontSize(16).text(`URL: ${result.url}`, {underline: true});
+            doc.fontSize(16).text(`URL: ${result.url}`, { underline: true, baseline: 'top' });
             doc.moveDown();
 
             const imgWidth = 180;
