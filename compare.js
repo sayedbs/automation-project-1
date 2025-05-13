@@ -12,7 +12,7 @@ let cookieAccepted = false;
 
 const config = {
   devBase: "https://dev.recordati-plus.de",
-  prodBase: "https://recordati-plus.de",
+  prodBase: "https://stage.recordati-plus.de",
   excelFile: "urls.xlsx",
   screenshotDir: "screenshots",
   reportPath: "reports/result.pdf"
@@ -115,7 +115,7 @@ async function captureScreenshot(page, url, outputPath) {
   }
 }
 
-async function generatePDFReport(results) {
+async function generatePDFReport(results, summary) {
     try {
         const doc = new PDFDocument({
             autoFirstPage: false,
@@ -129,11 +129,23 @@ async function generatePDFReport(results) {
         const writeStream = fs.createWriteStream(config.reportPath);
         doc.pipe(writeStream);
 
-        // Cover page 
+        // Cover page with Performance Summary
         doc.addPage();
         doc.fontSize(24).text('Visual Comparison Report', {align: 'center', baseline: 'top'});
+        doc.moveDown(1.5);
+
+        doc.fontSize(16).text(' 🚀 Performance Summary', {align: 'left'});
+        doc.moveDown(0.5);
+
+        doc.fontSize(12).text(`Total URLs processed: ${summary.totalUrls}`);
+        doc.text(`Average task duration: ${summary.avgDuration.toFixed(2)}s`);
+        doc.text(`Total execution time: ${summary.totalDuration.toFixed(2)}s`);
+        doc.text(`Total time: ${(summary.totalDuration / 60).toFixed(2)} min / ${(summary.totalDuration / 3600).toFixed(2)} hr`);
+        doc.moveDown(1);
+
         doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, {align: 'center'});
 
+        // print images and compare results
         for (const result of results) {
             doc.addPage();
             doc.fontSize(16).text(`URL: ${result.url}`, {underline: true, baseline: 'top'});
@@ -343,15 +355,21 @@ async function main() {
         const results = (await runWithConcurrencyLimit(tasks, concurrency)).filter(Boolean);
 
         await browser.close();
-        await generatePDFReport(results);
+
 
         const totalDuration = (Date.now() - startTime) / 1000;
         const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
 
-        console.log(`\n📊 Performance Summary:`);
+        console.log(`\n 📊 Performance Summary:`);
         console.log(`Total execution time: ${totalDuration.toFixed(2)}s`);
         console.log(`Average task duration: ${avgDuration.toFixed(2)}s`);
         console.log(`Tasks completed: ${results.length}`);
+
+        await generatePDFReport(results, {
+            totalUrls: results.length,
+            avgDuration,
+            totalDuration
+        });
 
     } catch (error) {
         console.error('❌ Process failed:', error.message);
