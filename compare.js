@@ -7,6 +7,8 @@ import PDFDocument from "pdfkit";
 
 const contextDir = './auth-session';
 
+let cookieAccepted = false;
+
 const config = {
   devBase: "https://dev.recordati-plus.de",
   prodBase: "https://recordati-plus.de",
@@ -68,17 +70,19 @@ async function captureScreenshot(page, url, outputPath) {
     await page.waitForLoadState("domcontentloaded");
 
     // ✅ Handle German Cookie Banner (CookieYes)
-    try {
-      const cookieButton = await page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]');
-      if (await cookieButton.isVisible()) {
-        await cookieButton.click();
-        console.log('🍪 Cookie consent accepted');
-        await page.waitForTimeout(500); // Give time to hide banner
-      } else {
-        console.log('🍪 Cookie consent not visible — skipping');
+    if (!cookieAccepted) {
+      try {
+        const cookieButton = await page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]');
+        if (await cookieButton.isVisible()) {
+          await cookieButton.click();
+          console.log('🍪 Cookie consent accepted');
+          await page.waitForTimeout(500); // Give time to hide banner
+        } else {
+          console.log('🍪 Cookie consent not visible — skipping');
+        }
+      } catch (err) {
+        console.warn('⚠️ Skipped cookie consent click:', err.message);
       }
-    } catch (err) {
-      console.warn('⚠️ Skipped cookie consent click:', err.message);
     }
 
     await page.waitForTimeout(2000);
