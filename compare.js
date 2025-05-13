@@ -5,160 +5,173 @@ import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 import PDFDocument from "pdfkit";
 
-const devBase = "https://dev.recordati-plus.de";
-const prodBase = "https://recordati-plus.de";
+const config = {
+  devBase: "https://dev.recordati-plus.de",
+  prodBase: "https://recordati-plus.de",
+  excelFile: "urls.xlsx",
+  screenshotDir: "screenshots",
+  reportPath: "reports/result.pdf"
+};
 
-const excelFile = "urls.xlsx";
-const screenshotDir = "screenshots";
-const reportPath = "reports/result.pdf";
-
-// Read URLs from the Excel file
 async function readUrlsFromExcel(filePath) {
-  const workbook = XLSX.readFile(filePath);
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const data = XLSX.utils.sheet_to_json(sheet);
-
-  return data
-    .map(row => row.URL && typeof row.URL === "string" ? row.URL.trim() : null)
-    .filter(url => url); // Remove null/empty rows
-}
-
-// Capture screenshot of the page
-async function captureScreenshot(page, fullUrl, outputPath) {
-  console.log(`Capturing screenshot for: ${fullUrl}`);
   try {
-    await page.goto(fullUrl, { waitUntil: "load", timeout: 60000 });
-    console.log(`Page loaded: ${fullUrl}`);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Excel file not found: ${filePath}`);
+    }
 
-    await page.waitForLoadState("load");
-    await page.screenshot({ path: outputPath, fullPage: true });
-    console.log(`Screenshot saved to: ${outputPath}`);
+    const workbook = XLSX.readFile(filePath);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(sheet);
+
+    if (data.length === 0) {
+      throw new Error('Excel file is empty');
+    }
+
+    // Get the first column name regardless of what it's called
+    const firstColumnName = Object.keys(data[0])[0];
+    console.log('Using column:', firstColumnName);
+
+    const urls = data
+      .map(row => {
+        const fullUrl = row[firstColumnName];
+        if (!fullUrl) return null;
+
+        try {
+          const url = new URL(fullUrl);
+          return url.pathname;
+        } catch {
+          const cleanUrl = fullUrl.toString().trim();
+          return cleanUrl.startsWith('/') ? cleanUrl : `/${cleanUrl}`;
+        }
+      })
+      .filter(Boolean);
+
+    console.log('Extracted paths:', urls);
+
+    if (urls.length === 0) {
+      throw new Error('No valid URLs found');
+    }
+
+    return urls;
   } catch (error) {
-    console.error(`Error capturing screenshot for: ${fullUrl}`, error);
+    console.error('Error reading Excel file:', error.message);
+    return [];
   }
 }
 
-// Compare screenshots and return the number of different pixels
+async function captureScreenshot(page, url, outputPath) {
+  try {
+    await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
+    await page.waitForLoadState("domcontentloaded");
+    await page.screenshot({ path: outputPath, fullPage: true });
+    console.log(`✅ Screenshot captured: ${outputPath}`);
+  } catch (error) {
+    console.error(`❌ Error capturing screenshot for ${url}:`, error.message);
+    throw error;
+  }
+}
+
 function compareScreenshots(img1Path, img2Path, diffPath) {
   try {
     const img1 = PNG.sync.read(fs.readFileSync(img1Path));
     const img2 = PNG.sync.read(fs.readFileSync(img2Path));
 
-    const width = Math.min(img1.width, img2.width);
-    const height = Math.min(img1.height, img2.height);
+    const compareWidth = Math.min(img1.width, img2.width);
+    const compareHeight = Math.min(img1.height, img2.height);
+    const diff = new PNG({ width: compareWidth, height: compareHeight });
 
-    const diff = new PNG({ width, height });
-    const numDiffPixels = pixelmatch(
-      img1.data,
-      img2.data,
-      diff.data,
-      width,
-      height,
-      { threshold: 0.1 }
-    );
-
+    const diffPixels = pixelmatch(img1.data, img2.data, diff.data, compareWidth, compareHeight, { threshold: 0.1 });
     fs.writeFileSync(diffPath, PNG.sync.write(diff));
-    console.log(`Diff image saved to: ${diffPath}`);
-    return numDiffPixels;
+    return diffPixels;
   } catch (error) {
-    console.error("Error comparing screenshots:", error);
-    return -1; // Return -1 on failure
+    console.error('Error comparing screenshots:', error.message);
+    throw error;
   }
 }
 
-// Generate PDF report with results
 async function generatePDFReport(results) {
-  const doc = new PDFDocument({ autoFirstPage: false });
-  const writeStream = fs.createWriteStream(reportPath);
-  doc.pipe(writeStream);
+  try {
+    const doc = new PDFDocument({ autoFirstPage: false });
+    const writeStream = fs.createWriteStream(config.reportPath);
+    doc.pipe(writeStream);
 
-  doc.addPage();
-  doc.fontSize(20).text("Visual Comparison Report", { align: "center" });
-  doc.moveDown();
-
-  for (const result of results) {
     doc.addPage();
-    doc.fontSize(14).text(`URL: ${result.url}`, { underline: true });
-    doc.text(`Match: ${result.match ? "✅ Yes" : "❌ No"} (${result.diffPixels} pixels different)`);
+    doc.fontSize(24).text('Visual Comparison Report', { align: 'center' });
     doc.moveDown();
+    doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
 
-    // Ensure the screenshot files exist before adding them to the PDF
-    if (fs.existsSync(result.devPath)) {
-      doc.text("DEV:");
-      doc.image(result.devPath, { width: 300 });
+    for (const result of results) {
+      doc.addPage();
+      doc.fontSize(16).text(`URL: ${result.url}`, { underline: true });
+      doc.fontSize(14).text(`Match: ${result.match ? '✅' : '❌'} (${result.diffPixels} pixels different)`);
       doc.moveDown();
-    } else {
-      console.warn(`⚠️ DEV screenshot missing for: ${result.url}`);
+
+      const imageOptions = { width: 300 };
+      if (fs.existsSync(result.devPath)) doc.image(result.devPath, imageOptions);
+      if (fs.existsSync(result.prodPath)) doc.image(result.prodPath, imageOptions);
+      if (!result.match && fs.existsSync(result.diffPath)) doc.image(result.diffPath, imageOptions);
     }
 
-    if (fs.existsSync(result.prodPath)) {
-      doc.text("PROD:");
-      doc.image(result.prodPath, { width: 300 });
-      doc.moveDown();
-    } else {
-      console.warn(`⚠️ PROD screenshot missing for: ${result.url}`);
-    }
-
-    if (!result.match && fs.existsSync(result.diffPath)) {
-      doc.text("DIFF:");
-      doc.image(result.diffPath, { width: 300 });
-      doc.moveDown();
-    }
-
-    doc.moveDown(2);
+    doc.end();
+    await new Promise(resolve => writeStream.on('finish', resolve));
+    console.log(`📄 PDF report generated: ${config.reportPath}`);
+  } catch (error) {
+    console.error('Error generating PDF:', error.message);
   }
-
-  doc.end();
-  await new Promise(resolve => writeStream.on("finish", resolve));
-  console.log("📄 PDF report generated:", reportPath);
 }
 
-(async () => {
-  // Ensure necessary directories exist
-  fs.ensureDirSync("screenshots/dev");
-  fs.ensureDirSync("screenshots/prod");
-  fs.ensureDirSync("screenshots/diff");
-  fs.ensureDirSync("reports");
+async function main() {
+  try {
+    ['dev', 'prod', 'diff'].forEach(dir =>
+      fs.ensureDirSync(`${config.screenshotDir}/${dir}`)
+    );
+    fs.ensureDirSync('reports');
 
-  // Read URLs from Excel
-  const urls = await readUrlsFromExcel(excelFile);
-  console.log("URLs read from Excel:", urls);
+    const urls = await readUrlsFromExcel(config.excelFile);
+    console.log(`📋 Found ${urls.length} URLs to process`);
 
-  // Launch browser
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  const results = [];
-
-  // Loop through each URL
-  for (const urlPath of urls) {
-    const cleanName = urlPath.replace(/\W+/g, "_");
-    const devPath = `screenshots/dev/${cleanName}.png`;
-    const prodPath = `screenshots/prod/${cleanName}.png`;
-    const diffPath = `screenshots/diff/${cleanName}_diff.png`;
-
-    console.log(`🔍 Comparing: ${urlPath}`);
-
-    // Capture screenshots
-    await captureScreenshot(page, `${devBase}${urlPath}`, devPath);
-    await captureScreenshot(page, `${prodBase}${urlPath}`, prodPath);
-
-    // If either screenshot is missing, skip this URL
-    if (!fs.existsSync(devPath) || !fs.existsSync(prodPath)) {
-      console.warn(`⚠️ Missing screenshot(s) for ${urlPath}`);
-      continue;
+    if (!urls.length) {
+      console.log('No URLs to process. Exiting.');
+      return;
     }
 
-    // Compare the screenshots
-    const diffPixels = compareScreenshots(devPath, prodPath, diffPath);
-    const match = diffPixels === 0;
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const results = [];
 
-    // Store the result
-    results.push({ url: urlPath, match, diffPixels, devPath, prodPath, diffPath });
+    for (const urlPath of urls) {
+      console.log(`\n🔍 Processing: ${urlPath}`);
+      const cleanName = urlPath.replace(/\W+/g, '_');
+      const paths = {
+        dev: `${config.screenshotDir}/dev/${cleanName}.png`,
+        prod: `${config.screenshotDir}/prod/${cleanName}.png`,
+        diff: `${config.screenshotDir}/diff/${cleanName}_diff.png`
+      };
+
+      try {
+        await captureScreenshot(page, `${config.devBase}${urlPath}`, paths.dev);
+        await captureScreenshot(page, `${config.prodBase}${urlPath}`, paths.prod);
+
+        const diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
+        results.push({
+          url: urlPath,
+          match: diffPixels === 0,
+          diffPixels,
+          devPath: paths.dev,
+          prodPath: paths.prod,
+          diffPath: paths.diff
+        });
+      } catch (error) {
+        console.error(`❌ Failed to process ${urlPath}`);
+      }
+    }
+
+    await browser.close();
+    await generatePDFReport(results);
+  } catch (error) {
+    console.error('❌ Process failed:', error.message);
+    process.exit(1);
   }
+}
 
-  // Close the browser
-  await browser.close();
-
-  // Generate the PDF report
-  await generatePDFReport(results);
-})();
+main();
