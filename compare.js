@@ -69,14 +69,14 @@ async function captureScreenshot(page, url, outputPath) {
     await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
     await page.waitForLoadState("domcontentloaded");
 
-    // ✅ Handle German Cookie Banner (CookieYes)
+    // Handle German Cookie Banner (CookieYes)
     if (!cookieAccepted) {
       try {
-        const cookieButton = await page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]');
+        const cookieButton = page.locator('button.cky-btn-accept[aria-label="Alle akzeptieren"]').first();
         if (await cookieButton.isVisible()) {
           await cookieButton.click();
           console.log('🍪 Cookie consent accepted');
-          await page.waitForTimeout(500); // Give time to hide banner
+          await page.waitForTimeout(500);
         } else {
           console.log('🍪 Cookie consent not visible — skipping');
         }
@@ -94,88 +94,97 @@ async function captureScreenshot(page, url, outputPath) {
   }
 }
 
+async function generatePDFReport(results) {
+    try {
+        const doc = new PDFDocument({ autoFirstPage: false });
+        const writeStream = fs.createWriteStream(config.reportPath);
+        doc.pipe(writeStream);
 
-function compareScreenshots(img1Path, img2Path, diffPath) {
-  try {
-    const img1 = PNG.sync.read(fs.readFileSync(img1Path));
-    const img2 = PNG.sync.read(fs.readFileSync(img2Path));
-    const compareWidth = Math.min(img1.width, img2.width);
-    const compareHeight = Math.min(img1.height, img2.height);
-    const diff = new PNG({ width: compareWidth, height: compareHeight });
-    const diffPixels = pixelmatch(img1.data, img2.data, diff.data, compareWidth, compareHeight, { threshold: 0.1 });
+        // Cover page
+        doc.addPage();
+        doc.fontSize(24).text('Visual Comparison Report', { align: 'center' });
+        doc.moveDown();
+        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
 
-    fs.writeFileSync(diffPath, PNG.sync.write(diff));
-    return diffPixels;
-  } catch (error) {
-    console.error('Error comparing screenshots:', error.message);
-    throw error;
-  }
+        for (const result of results) {
+            doc.addPage();
+            doc.fontSize(16).text(`URL: ${result.url}`, { underline: true });
+            doc.moveDown();
+
+            const imgWidth = 350;
+            const pageWidth = doc.page.width;
+            let y = doc.y;
+            const startX = (pageWidth - imgWidth) / 2;
+
+            // Helper to draw image and label, updating y
+            function drawImageWithLabel(imgPath, label) {
+                if (fs.existsSync(imgPath)) {
+                    // Get image dimensions
+                    const { height, width } = PNG.sync.read(fs.readFileSync(imgPath));
+                    const scale = imgWidth / width;
+                    const imgHeight = height * scale;
+
+                    doc.image(imgPath, startX, y, { width: imgWidth });
+                    y += imgHeight + 5;
+                    doc.fontSize(10).text(label, startX, y, { width: imgWidth, align: 'center' });
+                    y += 20;
+                }
+            }
+
+            drawImageWithLabel(result.devPath, 'DEV');
+            drawImageWithLabel(result.prodPath, 'PROD');
+            drawImageWithLabel(result.diffPath, 'DIFF');
+
+            y += 10;
+            doc.y = y;
+            doc.moveDown();
+            doc.fontSize(14).text(
+                `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
+                { align: 'left' }
+            );
+
+            if (!result.match) {
+                doc.moveDown();
+                doc.fontSize(12).fillColor('red').text(
+                    'Differences highlighted in the DIFF image above. Red/pink areas show where the screenshots differ.',
+                    { align: 'left' }
+                );
+                doc.fillColor('black');
+            }
+        }
+
+        doc.end();
+        await new Promise(resolve => writeStream.on('finish', resolve));
+        console.log(`📄 PDF report generated: ${config.reportPath}`);
+    } catch (error) {
+        console.error('Error generating PDF:', error.message);
+    }
 }
 
-async function generatePDFReport(results) {
-  try {
-    const doc = new PDFDocument({ autoFirstPage: false });
-    const writeStream = fs.createWriteStream(config.reportPath);
-    doc.pipe(writeStream);
 
-    doc.addPage();
-    doc.fontSize(24).text('Visual Comparison Report', { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+function compareScreenshots(img1Path, img2Path, diffPath) {
+  const img1 = PNG.sync.read(fs.readFileSync(img1Path));
+  const img2 = PNG.sync.read(fs.readFileSync(img2Path));
+  const { width, height } = img1;
 
-    for (const result of results) {
-      doc.addPage();
-      doc.fontSize(16).text(`URL: ${result.url}`, { underline: true });
-      doc.moveDown();
+  const diff = new PNG({ width, height });
+  const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height, {
+    threshold: 0.1,
+  });
 
-      const imgWidth = 180;
-      const margin = 30;
-      const startX = 50;
-      let y = doc.y;
-
-      // DEV and PROD side by side in one row
-      if (fs.existsSync(result.devPath)) {
-        doc.image(result.devPath, startX, y, { width: imgWidth });
-        doc.fontSize(10).text('DEV', startX, y + imgWidth + 5, { width: imgWidth, align: 'center' });
-      }
-      if (fs.existsSync(result.prodPath)) {
-        doc.image(result.prodPath, startX + imgWidth + margin, y, { width: imgWidth });
-        doc.fontSize(10).text('PROD', startX + imgWidth + margin, y + imgWidth + 5, { width: imgWidth, align: 'center' });
-      }
-
-      // Move below the first row for DIFF image
-      y = y + imgWidth + 40;
-      if (fs.existsSync(result.diffPath)) {
-        doc.image(result.diffPath, startX, y, { width: imgWidth * 2 + margin });
-        doc.fontSize(10).text('DIFF', startX, y + imgWidth + 5, { width: imgWidth * 2 + margin, align: 'center' });
-      }
-
-      doc.moveDown(18);
-      doc.fontSize(14).text(
-        `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
-        { align: 'left' }
-      );
-
-      if (!result.match) {
-        doc.moveDown();
-        doc.fontSize(12).fillColor('red').text(
-          'Differences highlighted in the DIFF image above. Red/pink areas show where the screenshots differ.',
-          { align: 'left' }
-        );
-        doc.fillColor('black');
-      }
-    }
-
-    doc.end();
-    await new Promise(resolve => writeStream.on('finish', resolve));
-    console.log(`📄 PDF report generated: ${config.reportPath}`);
-  } catch (error) {
-    console.error('Error generating PDF:', error.message);
-  }
+  fs.writeFileSync(diffPath, PNG.sync.write(diff));
+  return numDiffPixels;
 }
 
 async function main() {
   try {
+
+      // Clean output directories before generating new results
+      ['dev', 'prod', 'diff'].forEach(dir => {
+          fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
+      });
+      fs.emptyDirSync('reports');
+
     ['dev', 'prod', 'diff'].forEach(dir =>
         fs.ensureDirSync(`${config.screenshotDir}/${dir}`)
     );
@@ -185,7 +194,11 @@ async function main() {
     if (!urls.length) return console.log('No URLs to process. Exiting.');
 
     const browser = await chromium.launchPersistentContext(contextDir, {
-      headless: false  // 🚨 Visible browser to support login
+      headless: false,  // 🚨 Visible browser to support login
+      args: [
+        '--disable-blink-features=AutomationControlled'
+      ],
+      viewport: null
     });
 
     const page = await browser.newPage();
