@@ -111,43 +111,50 @@ async function generatePDFReport(results) {
             doc.fontSize(16).text(`URL: ${result.url}`, { underline: true });
             doc.moveDown();
 
-            const imgWidth = 350;
+            const imgWidth = 180;
+            const imgGap = 30;
             const pageWidth = doc.page.width;
-            let y = doc.y;
-            const startX = (pageWidth - imgWidth) / 2;
+            const totalWidth = imgWidth * 3 + imgGap * 2;
+            const startX = (pageWidth - totalWidth) / 2;
+            const y = doc.y;
 
-            // Helper to draw image and label, updating y
-            function drawImageWithLabel(imgPath, label) {
+            // Helper to draw image and label at specific x
+            function drawImageWithLabel(imgPath, label, x) {
                 if (fs.existsSync(imgPath)) {
-                    // Get image dimensions
                     const { height, width } = PNG.sync.read(fs.readFileSync(imgPath));
                     const scale = imgWidth / width;
                     const imgHeight = height * scale;
 
-                    doc.image(imgPath, startX, y, { width: imgWidth });
-                    y += imgHeight + 5;
-                    doc.fontSize(10).text(label, startX, y, { width: imgWidth, align: 'center' });
-                    y += 20;
+                    doc.image(imgPath, x, y, { width: imgWidth });
+                    doc.fontSize(10).text(label, x, y + imgHeight + 5, { width: imgWidth, align: 'center' });
+                    return imgHeight;
                 }
+                return 0;
             }
 
-            drawImageWithLabel(result.devPath, 'DEV');
-            drawImageWithLabel(result.prodPath, 'PROD');
-            drawImageWithLabel(result.diffPath, 'DIFF');
+            // Draw images side by side
+            const devHeight = drawImageWithLabel(result.devPath, 'DEV', startX);
+            const prodHeight = drawImageWithLabel(result.prodPath, 'PROD', startX + imgWidth + imgGap);
+            const diffHeight = drawImageWithLabel(result.diffPath, 'DIFF', startX + (imgWidth + imgGap) * 2);
 
-            y += 10;
-            doc.y = y;
+            // Find the max image height to position the description below all images/labels
+            const maxImgHeight = Math.max(devHeight, prodHeight, diffHeight);
+            let descY = y + maxImgHeight + 30;
+
+            doc.x = doc.page.margins.left;
+            doc.y = descY;
+
             doc.moveDown();
             doc.fontSize(14).text(
                 `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
-                { align: 'left' }
+                { align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right }
             );
 
             if (!result.match) {
                 doc.moveDown();
                 doc.fontSize(12).fillColor('red').text(
                     'Differences highlighted in the DIFF image above. Red/pink areas show where the screenshots differ.',
-                    { align: 'left' }
+                    { align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right }
                 );
                 doc.fillColor('black');
             }
@@ -160,8 +167,6 @@ async function generatePDFReport(results) {
         console.error('Error generating PDF:', error.message);
     }
 }
-
-
 function compareScreenshots(img1Path, img2Path, diffPath) {
   const img1 = PNG.sync.read(fs.readFileSync(img1Path));
   const img2 = PNG.sync.read(fs.readFileSync(img2Path));
