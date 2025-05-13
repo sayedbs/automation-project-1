@@ -69,6 +69,7 @@ async function captureScreenshot(page, url, outputPath) {
     await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
     await page.waitForLoadState("domcontentloaded");
 
+
     // Handle German Cookie Banner (CookieYes)
     if (!cookieAccepted) {
       try {
@@ -85,7 +86,27 @@ async function captureScreenshot(page, url, outputPath) {
       }
     }
 
-    await page.waitForTimeout(2000);
+    // Inject custom styles
+    await page.addStyleTag({
+      content: `
+        .app_container.theme {
+          position: static !important;
+          height: auto !important;
+        }
+        .layout {
+          position: relative !important;
+          height: auto !important;
+        }
+        .theme .content {
+          position: static !important;
+          display: block !important;
+        }
+      `
+    });
+
+      await page.waitForTimeout(1000);
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(4000);
     await page.screenshot({ path: outputPath, fullPage: true });
     console.log(`✅ Screenshot captured: ${outputPath}`);
   } catch (error) {
@@ -96,7 +117,7 @@ async function captureScreenshot(page, url, outputPath) {
 
 async function generatePDFReport(results) {
     try {
-        const doc = new PDFDocument({ autoFirstPage: false });
+        const doc = new PDFDocument({autoFirstPage: false});
         const writeStream = fs.createWriteStream(config.reportPath);
         doc.pipe(writeStream);
 
@@ -104,11 +125,11 @@ async function generatePDFReport(results) {
         doc.addPage();
         doc.fontSize(24).text('Visual Comparison Report', { align: 'center' });
         doc.moveDown();
-        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, {align: 'center'});
 
         for (const result of results) {
             doc.addPage();
-            doc.fontSize(16).text(`URL: ${result.url}`, { underline: true });
+            doc.fontSize(16).text(`URL: ${result.url}`, {underline: true});
             doc.moveDown();
 
             const imgWidth = 180;
@@ -122,20 +143,46 @@ async function generatePDFReport(results) {
             function drawImageWithLabel(imgPath, label, x) {
                 if (fs.existsSync(imgPath)) {
                     const { height, width } = PNG.sync.read(fs.readFileSync(imgPath));
-                    const scale = imgWidth / width;
-                    const imgHeight = height * scale;
+                    let finalWidth = imgWidth;
+                    let finalHeight = (height * imgWidth) / width;
 
-                    doc.image(imgPath, x, y, { width: imgWidth });
-                    doc.fontSize(10).text(label, x, y + imgHeight + 5, { width: imgWidth, align: 'center' });
-                    return imgHeight;
+                    if (finalHeight > 520) {
+                        finalHeight = 520;
+                        finalWidth = (width * finalHeight) / height;
+                    }
+
+                    doc.image(imgPath, x, y, {width: finalWidth});
+                    doc.fontSize(10).text(label, x, y + finalHeight + 5, {width: finalWidth, align: 'center'});
+                    return finalHeight;
                 }
                 return 0;
             }
 
+            // Helper to calculate dimensions with height limit
+            function calculateDimensions(imgPath) {
+                if (fs.existsSync(imgPath)) {
+                    const {height, width} = PNG.sync.read(fs.readFileSync(imgPath));
+                    let finalWidth = imgWidth;
+                    let finalHeight = (height * imgWidth) / width;
+
+                    if (finalHeight > 520) {
+                        finalHeight = 520;
+                        finalWidth = (width * finalHeight) / height;
+                    }
+                    return {width: finalWidth, height: finalHeight};
+                }
+                return {width: 0, height: 0};
+            }
+
             // Draw images side by side
-            const devHeight = drawImageWithLabel(result.devPath, 'DEV', startX);
-            const prodHeight = drawImageWithLabel(result.prodPath, 'PROD', startX + imgWidth + imgGap);
-            const diffHeight = drawImageWithLabel(result.diffPath, 'DIFF', startX + (imgWidth + imgGap) * 2);
+            const devDims = calculateDimensions(result.devPath);
+            const prodDims = calculateDimensions(result.prodPath);
+            const diffDims = calculateDimensions(result.diffPath);
+
+            const devHeight = devDims.height ? drawImageWithLabel(result.devPath, 'DEV', startX) : 0;
+            const prodHeight = prodDims.height ? drawImageWithLabel(result.prodPath, 'PROD', startX + imgWidth + imgGap) : 0;
+            const diffHeight = diffDims.height ? drawImageWithLabel(result.diffPath, 'DIFF', startX + (imgWidth + imgGap) * 2) : 0;
+
 
             // Find the max image height to position the description below all images/labels
             const maxImgHeight = Math.max(devHeight, prodHeight, diffHeight);
@@ -147,14 +194,14 @@ async function generatePDFReport(results) {
             doc.moveDown();
             doc.fontSize(14).text(
                 `Match: ${result.match ? '✅ No visual difference' : `❌ ${result.diffPixels} pixels differ`}`,
-                { align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right }
+                {align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right}
             );
 
             if (!result.match) {
                 doc.moveDown();
                 doc.fontSize(12).fillColor('red').text(
                     'Differences highlighted in the DIFF image above. Red/pink areas show where the screenshots differ.',
-                    { align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right }
+                    {align: 'left', width: pageWidth - doc.page.margins.left - doc.page.margins.right}
                 );
                 doc.fillColor('black');
             }
@@ -167,18 +214,32 @@ async function generatePDFReport(results) {
         console.error('Error generating PDF:', error.message);
     }
 }
+
+// Pad a PNG image to the target width/height with white background
+function padImage(img, targetWidth, targetHeight) {
+    if (img.width === targetWidth && img.height === targetHeight) return img;
+    const padded = new PNG({ width: targetWidth, height: targetHeight, fill: true });
+    // Fill with white
+    padded.data.fill(255);
+    // Copy original image data
+    PNG.bitblt(img, padded, 0, 0, img.width, img.height, 0, 0);
+    return padded;
+}
+
 function compareScreenshots(img1Path, img2Path, diffPath) {
-  const img1 = PNG.sync.read(fs.readFileSync(img1Path));
-  const img2 = PNG.sync.read(fs.readFileSync(img2Path));
-  const { width, height } = img1;
+    let img1 = PNG.sync.read(fs.readFileSync(img1Path));
+    let img2 = PNG.sync.read(fs.readFileSync(img2Path));
+    const width = Math.max(img1.width, img2.width);
+    const height = Math.max(img1.height, img2.height);
 
-  const diff = new PNG({ width, height });
-  const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height, {
-    threshold: 0.1,
-  });
+    img1 = padImage(img1, width, height);
+    img2 = padImage(img2, width, height);
 
-  fs.writeFileSync(diffPath, PNG.sync.write(diff));
-  return numDiffPixels;
+    const diff = new PNG({ width, height });
+    const numDiffPixels = pixelmatch(img1.data, img2.data, diff.data, width, height, { threshold: 0.1 });
+
+    fs.writeFileSync(diffPath, PNG.sync.write(diff));
+    return numDiffPixels;
 }
 
 async function main() {
