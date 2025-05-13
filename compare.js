@@ -4,6 +4,7 @@ import { chromium } from "playwright";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 import PDFDocument from "pdfkit";
+import {process} from "pngjs/lib/filter-parse-sync.js";
 
 const contextDir = './auth-session';
 
@@ -270,6 +271,8 @@ async function runWithConcurrencyLimit(tasks, limit) {
 
 async function main() {
     try {
+        const startTime = Date.now();
+
         // Clean and prepare output directories
         ['dev', 'prod', 'diff'].forEach(dir => {
             fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
@@ -294,6 +297,7 @@ async function main() {
         const concurrency = 5;
 
         const tasks = urls.map(urlPath => async () => {
+            const taskStartTime = Date.now();
             const cleanName = urlPath.replace(/\W+/g, '_');
             const paths = {
                 dev: `${config.screenshotDir}/dev/${cleanName}.png`,
@@ -311,6 +315,8 @@ async function main() {
                     const diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
 
                     await tab.close();
+                    const taskDuration = (Date.now() - taskStartTime) / 1000;
+                    console.log(`⏱️ Task completed in ${taskDuration.toFixed(2)}s`);
 
                     return {
                         url: urlPath,
@@ -318,7 +324,8 @@ async function main() {
                         diffPixels,
                         devPath: paths.dev,
                         prodPath: paths.prod,
-                        diffPath: paths.diff
+                        diffPath: paths.diff,
+                        duration: taskDuration
                     };
                 } catch (error) {
                     await tab.close();
@@ -337,6 +344,15 @@ async function main() {
 
         await browser.close();
         await generatePDFReport(results);
+
+        const totalDuration = (Date.now() - startTime) / 1000;
+        const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
+
+        console.log(`\n📊 Performance Summary:`);
+        console.log(`Total execution time: ${totalDuration.toFixed(2)}s`);
+        console.log(`Average task duration: ${avgDuration.toFixed(2)}s`);
+        console.log(`Tasks completed: ${results.length}`);
+
     } catch (error) {
         console.error('❌ Process failed:', error.message);
         process.exit(1);
