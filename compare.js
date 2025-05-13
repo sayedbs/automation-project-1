@@ -144,6 +144,7 @@ async function generatePDFReport(results) {
             const totalWidth = imgWidth * 3 + imgGap * 2;
             const startX = (pageWidth - totalWidth) / 2;
             const y = doc.y;
+            const imageMaxheight= 580;
 
             // Helper to draw image and label at specific x
             function drawImageWithLabel(imgPath, label, x) {
@@ -152,8 +153,8 @@ async function generatePDFReport(results) {
                     let finalWidth = imgWidth;
                     let finalHeight = (height * imgWidth) / width;
 
-                    if (finalHeight > 600) {
-                        finalHeight = 600;
+                    if (finalHeight > imageMaxheight) {
+                        finalHeight = imageMaxheight;
                         finalWidth = (width * finalHeight) / height;
                     }
 
@@ -171,13 +172,13 @@ async function generatePDFReport(results) {
                     let finalWidth = imgWidth;
                     let finalHeight = (height * imgWidth) / width;
 
-                    if (finalHeight > 520) {
-                        finalHeight = 520;
+                    if (finalHeight > imageMaxheight) {
+                        finalHeight = imageMaxheight;
                         finalWidth = (width * finalHeight) / height;
                     }
                     return {width: finalWidth, height: finalHeight};
                 }
-                return {width: 0, height: 0};
+                return { width: 0, height: 0};
             }
 
             // Draw images side by side
@@ -247,69 +248,99 @@ function compareScreenshots(img1Path, img2Path, diffPath) {
     return numDiffPixels;
 }
 
-async function main() {
-  try {
-
-      // Clean output directories before generating new results
-      ['dev', 'prod', 'diff'].forEach(dir => {
-          fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
-      });
-      fs.emptyDirSync('reports');
-
-    ['dev', 'prod', 'diff'].forEach(dir =>
-        fs.ensureDirSync(`${config.screenshotDir}/${dir}`)
-    );
-    fs.ensureDirSync('reports');
-
-    const urls = await readUrlsFromExcel(config.excelFile);
-    if (!urls.length) return console.log('No URLs to process. Exiting.');
-
-    const browser = await chromium.launchPersistentContext(contextDir, {
-      headless: false,  // 🚨 Visible browser to support login
-      args: [
-        '--disable-blink-features=AutomationControlled'
-      ],
-      viewport: null
-    });
-
-    const page = await browser.newPage();
-    await ensureLoggedIn(page); // 🔑 Login check happens here
-
+async function runWithConcurrencyLimit(tasks, limit) {
     const results = [];
+    const executing = [];
 
-    for (const urlPath of urls) {
-      console.log(`\n🔍 Processing: ${urlPath}`);
-      const cleanName = urlPath.replace(/\W+/g, '_');
-      const paths = {
-        dev: `${config.screenshotDir}/dev/${cleanName}.png`,
-        prod: `${config.screenshotDir}/prod/${cleanName}.png`,
-        diff: `${config.screenshotDir}/diff/${cleanName}_diff.png`
-      };
-
-      try {
-        await captureScreenshot(page, `${config.devBase}${urlPath}`, paths.dev);
-        await captureScreenshot(page, `${config.prodBase}${urlPath}`, paths.prod);
-        const diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
-
-        results.push({
-          url: urlPath,
-          match: diffPixels === 0,
-          diffPixels,
-          devPath: paths.dev,
-          prodPath: paths.prod,
-          diffPath: paths.diff
+    for (const task of tasks) {
+        const p = task().then(result => {
+            executing.splice(executing.indexOf(p), 1);
+            return result;
         });
-      } catch (error) {
-        console.error(`❌ Failed to process ${urlPath}`);
-      }
+        results.push(p);
+        executing.push(p);
+
+        if (executing.length >= limit) {
+            await Promise.race(executing);
+        }
     }
 
-    await browser.close();
-    await generatePDFReport(results);
-  } catch (error) {
-    console.error('❌ Process failed:', error.message);
-    process.exit(1);
-  }
+    return Promise.all(results);
+}
+
+async function main() {
+    try {
+        // Clean and prepare output directories
+        ['dev', 'prod', 'diff'].forEach(dir => {
+            fs.emptyDirSync(`${config.screenshotDir}/${dir}`);
+            fs.ensureDirSync(`${config.screenshotDir}/${dir}`);
+        });
+        fs.emptyDirSync('reports');
+        fs.ensureDirSync('reports');
+
+        const urls = await readUrlsFromExcel(config.excelFile);
+        if (!urls.length) return console.log('No URLs to process. Exiting.');
+
+        const browser = await chromium.launchPersistentContext(contextDir, {
+            headless: false,
+            args: ['--disable-blink-features=AutomationControlled'],
+            viewport: null
+        });
+
+        const page = await browser.newPage();
+        await ensureLoggedIn(page);
+        await page.close(); // Close initial page after login check
+
+        const concurrency = 5;
+
+        const tasks = urls.map(urlPath => async () => {
+            const cleanName = urlPath.replace(/\W+/g, '_');
+            const paths = {
+                dev: `${config.screenshotDir}/dev/${cleanName}.png`,
+                prod: `${config.screenshotDir}/prod/${cleanName}.png`,
+                diff: `${config.screenshotDir}/diff/${cleanName}_diff.png`
+            };
+
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                const tab = await browser.newPage();
+                try {
+                    console.log(`\n🔍 Attempt ${attempt} - Processing: ${urlPath}`);
+                    await captureScreenshot(tab, `${config.devBase}${urlPath}`, paths.dev);
+                    await captureScreenshot(tab, `${config.prodBase}${urlPath}`, paths.prod);
+
+                    const diffPixels = compareScreenshots(paths.dev, paths.prod, paths.diff);
+
+                    await tab.close();
+
+                    return {
+                        url: urlPath,
+                        match: diffPixels === 0,
+                        diffPixels,
+                        devPath: paths.dev,
+                        prodPath: paths.prod,
+                        diffPath: paths.diff
+                    };
+                } catch (error) {
+                    await tab.close();
+                    console.error(`❌ Attempt ${attempt} failed for ${urlPath}: ${error.message}`);
+                    if (attempt === 3) {
+                        console.error(`💥 All 3 attempts failed for ${urlPath}`);
+                        return null;
+                    } else {
+                        console.log(`🔁 Retrying ${urlPath} (attempt ${attempt + 1}/3)...`);
+                    }
+                }
+            }
+        });
+
+        const results = (await runWithConcurrencyLimit(tasks, concurrency)).filter(Boolean);
+
+        await browser.close();
+        await generatePDFReport(results);
+    } catch (error) {
+        console.error('❌ Process failed:', error.message);
+        process.exit(1);
+    }
 }
 
 main();
