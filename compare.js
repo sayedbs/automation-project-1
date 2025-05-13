@@ -104,9 +104,8 @@ async function captureScreenshot(page, url, outputPath) {
       `
     });
 
-    await page.waitForTimeout(500);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(3000);
     await page.screenshot({ path: outputPath, fullPage: true });
     console.log(`✅ Screenshot captured: ${outputPath}`);
   } catch (error) {
@@ -117,18 +116,26 @@ async function captureScreenshot(page, url, outputPath) {
 
 async function generatePDFReport(results) {
     try {
-        const doc = new PDFDocument({autoFirstPage: false});
+        const doc = new PDFDocument({
+            autoFirstPage: false,
+            margins: {
+                top: 20,
+                bottom: 20,
+                left: 50,
+                right: 50
+            }
+        });
         const writeStream = fs.createWriteStream(config.reportPath);
         doc.pipe(writeStream);
 
-        // Cover page
+        // Cover page 
         doc.addPage();
-        doc.fontSize(24).text('Visual Comparison Report', { align: 'center', baseline: 'top' });
-        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+        doc.fontSize(24).text('Visual Comparison Report', {align: 'center', baseline: 'top'});
+        doc.fontSize(12).text(`Generated: ${new Date().toLocaleString()}`, {align: 'center'});
 
         for (const result of results) {
             doc.addPage();
-            doc.fontSize(16).text(`URL: ${result.url}`, { underline: true, baseline: 'top' });
+            doc.fontSize(16).text(`URL: ${result.url}`, {underline: true, baseline: 'top'});
             doc.moveDown();
 
             const imgWidth = 180;
@@ -141,17 +148,17 @@ async function generatePDFReport(results) {
             // Helper to draw image and label at specific x
             function drawImageWithLabel(imgPath, label, x) {
                 if (fs.existsSync(imgPath)) {
-                    const { height, width } = PNG.sync.read(fs.readFileSync(imgPath));
+                    const {height, width} = PNG.sync.read(fs.readFileSync(imgPath));
                     let finalWidth = imgWidth;
                     let finalHeight = (height * imgWidth) / width;
 
-                    if (finalHeight > 520) {
-                        finalHeight = 520;
+                    if (finalHeight > 600) {
+                        finalHeight = 600;
                         finalWidth = (width * finalHeight) / height;
                     }
 
-                    doc.image(imgPath, x, y, {width: finalWidth});
-                    doc.fontSize(10).text(label, x, y + finalHeight + 5, {width: finalWidth, align: 'center'});
+                    doc.fontSize(10).text(label, x, y, {width: finalWidth, align: 'center'});
+                    doc.image(imgPath, x, y + 15, {width: finalWidth});
                     return finalHeight;
                 }
                 return 0;
@@ -182,10 +189,9 @@ async function generatePDFReport(results) {
             const prodHeight = prodDims.height ? drawImageWithLabel(result.prodPath, 'PROD', startX + imgWidth + imgGap) : 0;
             const diffHeight = diffDims.height ? drawImageWithLabel(result.diffPath, 'DIFF', startX + (imgWidth + imgGap) * 2) : 0;
 
-
-            // Find the max image height to position the description below all images/labels
+            // Find the max image height to position the description below all images/labels 
             const maxImgHeight = Math.max(devHeight, prodHeight, diffHeight);
-            let descY = y + maxImgHeight + 30;
+            let descY = y + maxImgHeight + 45; // Increased to account for label above
 
             doc.x = doc.page.margins.left;
             doc.y = descY;
