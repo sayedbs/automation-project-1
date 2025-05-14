@@ -65,6 +65,29 @@ async function ensureLoggedIn(page) {
   }
 }
 
+async function ensureLoggedInAndNavigate(page) {
+    console.log("🔐  Checking DEV login status...");
+    await page.goto(`${config.devBase}/de_DE/account/signin`, {waitUntil: "domcontentloaded"});
+
+    if (page.url().includes("/account/signin")) {
+        console.log("🔑 DEV Login required. Please complete login in the opened browser...");
+        await page.waitForURL(url => url.toString().startsWith(config.devBase) && !url.toString().includes("/account/signin"), {timeout: 120000});
+        console.log("✅ DEV Login successful.");
+    } else {
+        console.log("✅ DEV Already logged in.");
+    }
+
+    console.log("🔐  Checking PROD login status...");
+    await page.goto(`${config.prodBase}/de_DE/account/signin`, {waitUntil: "domcontentloaded"});
+
+    if (page.url().includes("/account/signin")) {
+        console.log("🔑 PROD Login required. Please complete login in the opened browser...");
+        await page.waitForURL(url => url.toString().startsWith(config.prodBase) && !url.toString().includes("/account/signin"), {timeout: 120000});
+        console.log("✅ PROD Login successful.");
+    } else {
+        console.log("✅ PROD Already logged in.");
+    }
+}
 async function captureScreenshot(page, url, outputPath) {
   try {
     await page.goto(url, { waitUntil: "networkidle", timeout: 60000 });
@@ -304,6 +327,7 @@ async function main() {
 
         const page = await browser.newPage();
         await ensureLoggedIn(page);
+        await ensureLoggedInAndNavigate(page);
         await page.close(); // Close initial page after login check
 
         const concurrency = 5;
@@ -321,6 +345,7 @@ async function main() {
                 const tab = await browser.newPage();
                 try {
                     console.log(`\n🔍 Attempt ${attempt} - Processing: ${urlPath}`);
+
                     await captureScreenshot(tab, `${config.devBase}${urlPath}`, paths.dev);
                     await captureScreenshot(tab, `${config.prodBase}${urlPath}`, paths.prod);
 
