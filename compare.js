@@ -9,14 +9,21 @@ import {process} from "pngjs/lib/filter-parse-sync.js";
 const contextDir = './auth-session';
 
 let cookieAccepted = false;
+let isGatedLogin = false;
 
 const config = {
   devBase: "https://dev.recordati-plus.de",
-  prodBase: "https://stage.recordati-plus.de",
+  prodBase: "https://recordati-plus.de",
   excelFile: "urls.xlsx",
   screenshotDir: "screenshots",
   reportPath: "reports/result.pdf"
 };
+
+function getEnvironment(url) {
+  if (url.includes("dev.")) return "Dev";
+  if (url.includes("stage.")) return "Stage";
+  return "Prod";
+}
 
 async function readUrlsFromExcel(filePath) {
   try {
@@ -87,6 +94,8 @@ async function ensureLoggedInAndNavigate(page) {
     } else {
         console.log("✅ PROD Already logged in.");
     }
+
+    isGatedLogin = true
 }
 async function captureScreenshot(page, url, outputPath) {
   try {
@@ -222,9 +231,9 @@ async function generatePDFReport(results, summary) {
             const prodDims = calculateDimensions(result.prodPath);
             const diffDims = calculateDimensions(result.diffPath);
 
-            const devHeight = devDims.height ? drawImageWithLabel(result.devPath, 'DEV', startX) : 0;
-            const prodHeight = prodDims.height ? drawImageWithLabel(result.prodPath, 'PROD', startX + imgWidth + imgGap) : 0;
-            const diffHeight = diffDims.height ? drawImageWithLabel(result.diffPath, 'DIFF', startX + (imgWidth + imgGap) * 2) : 0;
+            const devHeight = devDims.height ? drawImageWithLabel(result.devPath, getEnvironment(config.devBase), startX) : 0;
+            const prodHeight = prodDims.height ? drawImageWithLabel(result.prodPath, getEnvironment(config.prodBase), startX + imgWidth + imgGap) : 0;
+            const diffHeight = diffDims.height ? drawImageWithLabel(result.diffPath, 'Compare', startX + (imgWidth + imgGap) * 2) : 0;
 
             // Find the max image height to position the description below all images/labels 
             const maxImgHeight = Math.max(devHeight, prodHeight, diffHeight);
@@ -327,7 +336,10 @@ async function main() {
 
         const page = await browser.newPage();
         await ensureLoggedIn(page);
-        await ensureLoggedInAndNavigate(page);
+
+        if(!isGatedLogin) {
+          await ensureLoggedInAndNavigate(page);
+        }
         await page.close(); // Close initial page after login check
 
         const concurrency = 5;

@@ -18,6 +18,8 @@ Thumbs.db
 auth-session/
 auth-session/*
 
+
+
 # Logs and databases
 *.log
 *.sql
