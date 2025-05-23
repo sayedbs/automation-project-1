@@ -12,7 +12,7 @@ let cookieAccepted = false;
 let isGatedLogin = false;
 
 const config = {
-  devBase: "https://dev.recordati-plus.de",
+  devBase: "http://localhost:3000",
   prodBase: "https://recordati-plus.de",
   excelFile: "urls.xlsx",
   screenshotDir: "screenshots",
@@ -20,6 +20,7 @@ const config = {
 };
 
 function getEnvironment(url) {
+  if (url.includes("localhost")) return "local";
   if (url.includes("dev.")) return "Dev";
   if (url.includes("stage.")) return "Stage";
   return "Prod";
@@ -73,6 +74,8 @@ async function ensureLoggedIn(page) {
 }
 
 async function ensureLoggedInAndNavigate(page) {
+    // isGatedLogin = true 
+    // return; // when progress without login 
     console.log("🔐  Checking DEV login status...");
     await page.goto(`${config.devBase}/de_DE/account/signin`, {waitUntil: "domcontentloaded"});
 
