@@ -18,11 +18,25 @@ Thumbs.db
 auth-session/
 auth-session/*
 
+
 reports/
 reports/*
 
 screenshots/
 screenshots/*
+
+
+
+node_modules/
+node_modules/*
+pakage.lock.json
+*-lock.json
+lock.json
+yarn.lock
+pnpm-lock.yaml
+npm-shrinkwrap.json
+bun.lockb
+
 
 
 # Logs and databases
