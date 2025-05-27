@@ -12,7 +12,7 @@ let cookieAccepted = false;
 let isGatedLogin = false;
 
 const config = {
-  devBase: "http://localhost:3000",
+  devBase: "https://stage.recordati-plus.de",
   prodBase: "https://recordati-plus.de",
   excelFile: "urls.xlsx",
   screenshotDir: "screenshots",
