@@ -151,6 +151,8 @@ async function captureScreenshot(page, url, outputPath) {
 }
 
 async function generatePDFReport(results, summary) {
+    console.log('🙏 please wait...');
+    console.log('📄 Generating PDF report...');
     try {
         const doc = new PDFDocument({
             autoFirstPage: false,
