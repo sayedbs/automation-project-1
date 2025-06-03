@@ -56,9 +56,13 @@ async function extractLinks(url) {
 
 async function processUrls(urls) {
     const results = [];
+
+    let count = 0;
     
     for (const url of urls) {
-        console.log(`\nProcessing URL: ${url}`);
+        count++;
+
+        console.log(`\n${count} - Processing URL: ${url}`);
         const { internalLinks, externalLinks } = await extractLinks(url);
         
         // Create summary text
