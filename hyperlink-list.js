@@ -56,7 +56,7 @@ async function extractLinks(url) {
 
 async function processUrls(urls) {
     const results = [];
-
+    
     let count = 0;
     
     for (const url of urls) {
@@ -91,12 +91,20 @@ async function main() {
         const data = xlsx.utils.sheet_to_json(worksheet);
         
         // Extract URLs from the Excel file
-        const urls = data.map(row => row.url).filter(url => url);
+        const urls = [];
+        if (data.length > 0) {
+            // Get the first column name (which contains the URL)
+            const firstColumn = Object.keys(data[0])[0];
+            // Extract URLs from each row
+            urls.push(...data.map(row => row[firstColumn]).filter(url => url));
+        }
         
         if (urls.length === 0) {
             console.error('No URLs found in the input Excel file');
             return;
         }
+
+        console.log(`Found ${urls.length} URLs to process`);
 
         // Process URLs
         const results = await processUrls(urls);
